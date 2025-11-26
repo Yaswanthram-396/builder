@@ -44,11 +44,28 @@ def ai_score_lead(lead):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.4
+            model="gpt-4o-mini",  # Fixed model name
+            messages=[
+                {"role": "system", "content": "You are a real estate lead scoring expert. Always respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.4,
+            response_format={"type": "json_object"}  # Force JSON response
         )
         text = response.choices[0].message.content
+        
+        if not text:
+            raise ValueError("Empty response from GPT")
+
+        # Clean the response - remove markdown code blocks if present
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
 
         # Expect JSON response
         import json
@@ -60,7 +77,12 @@ def ai_score_lead(lead):
             result.get("reason", "No reason provided.")
         )
 
+    except json.JSONDecodeError as e:
+        print(f"❌ GPT Scoring JSON Error: {e}")
+        print(f"   Response was: {text[:200] if 'text' in locals() else 'No response'}")
+        # fallback if JSON parsing fails
+        return (0, "NONE", "AI scoring failed - invalid JSON response.")
     except Exception as e:
-        print("❌ GPT Scoring Error:", e)
+        print(f"❌ GPT Scoring Error: {e}")
         # fallback if something fails
         return (0, "NONE", "AI scoring failed.")

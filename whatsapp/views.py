@@ -5,9 +5,10 @@ import json
 import os
 
 from .utils import send_whatsapp_message
+from .utils import send_whatsapp_buttons
 from .models import Lead, ConversationState, Property
 
-# Sheets Sync
+# Sheets Sync   
 from whatsapp.sheets import add_lead_to_sheet
 
 # Drive Upload Link
@@ -56,51 +57,96 @@ def send_matching_properties_to_buyer(buyer_lead, phone):
 # ==================== STATE MACHINE ====================
 
 def handle_message(phone, text):
-    from whatsapp.ai.normalizer import normalize_answer  # AI Normalizer
-    from whatsapp.ai.scorer import ai_score_lead          # AI Scorer
+    from whatsapp.ai.normalizer import normalize_answer
+    from whatsapp.ai.scorer import ai_score_lead
 
     lead, _ = Lead.objects.get_or_create(phone=phone)
     state, _ = ConversationState.objects.get_or_create(phone=phone)
 
-    txt = text.strip()
+    # Process text input (button responses are already extracted in webhook)
+    txt = text.strip().lower()
+    print(f"📥 Processing message: '{text}' -> '{txt}' | Current step: {state.current_step} | Lead type: {lead.lead_type}")
 
-    # ================= INIT =================
-    if state.current_step == "INIT":
-        send_whatsapp_message(phone, "Welcome to Dheeraj Properties! Do you want to BUY or SELL a property?")
+    # ==================== GREETING + FRESH START ====================
+    greetings = ["hi", "hii", "hello", "hey", "start", "yo", "hola"]
+    if txt in greetings:
+        lead.lead_type = ""
+        lead.data = {}
+        lead.status = "NEW"
+        lead.save()
+
+        send_whatsapp_buttons(
+            phone,
+            "👋 Welcome to *Dheeraj Properties!*\nHow can we help you today?",
+            ["BUY", "SELL"]
+        )
         state.current_step = "ASK_BUY_OR_SELL"
         state.save()
         return
 
-    # ================= ASK BUY/SELL =================
-    if state.current_step == "ASK_BUY_OR_SELL":
-        low = txt.lower()
-        if low in ["buy", "buyer", "purchase"]:
+    # ==================== ALREADY COMPLETED ====================
+    if state.current_step == "COMPLETED":
+        send_whatsapp_message(phone, "🙏 Thank you! Type *Hi* to start a new inquiry.")
+        return
+
+    # ==================== ASK BUY OR SELL ====================
+    if state.current_step == "ASK_BUY_OR_SELL" or state.current_step == "INIT":
+        # BUY SELECTED
+        if "buy" in txt or txt == "buy":
+            print(f"✅ BUY selected, setting lead type to BUYER")
             lead.lead_type = "BUYER"
+            lead.data = {}
             lead.save()
-            send_whatsapp_message(phone, "Great! 🏡 What type of property are you looking for? (Apartment/House/Plot)")
+            print(f"📤 Sending property type buttons to {phone}...")
+            send_whatsapp_buttons(
+                phone,
+                "Great! 🏡 What type of property are you looking for?",
+                ["Apartment", "House", "Plot"]
+            )
             state.current_step = "BUY_Q1"
             state.save()
+            print(f"✅ State updated to BUY_Q1, buttons should be sent")
             return
 
-        elif low in ["sell", "seller", "selling"]:
+        # SELL SELECTED
+        elif "sell" in txt or txt == "sell":
+            print(f"✅ SELL selected, setting lead type to SELLER")
             lead.lead_type = "SELLER"
+            lead.data = {}
             lead.save()
-            send_whatsapp_message(phone, "Awesome! 🏠 What type of property are you selling? (Apartment/House/Plot/Commercial)")
+            send_whatsapp_buttons(
+                phone,
+                "Awesome! 🏠 What type of property are you selling?",
+                ["Apartment", "House", "Plot"]
+            )
             state.current_step = "SELL_Q1"
             state.save()
+            print(f"✅ State updated to SELL_Q1")
             return
 
-        else:
-            send_whatsapp_message(phone, "❓ Please reply with BUY or SELL.")
-            return
+        # INVALID INPUT - resend buttons
+        print(f"❌ Invalid input in ASK_BUY_OR_SELL: '{txt}' (state: {state.current_step})")
+        send_whatsapp_buttons(
+            phone,
+            "❓ Please select one:",
+            ["BUY", "SELL"]
+        )
+        # Ensure state is set correctly
+        if state.current_step != "ASK_BUY_OR_SELL":
+            state.current_step = "ASK_BUY_OR_SELL"
+            state.save()
+        return
 
-    # ================= SELL FLOW =================
+
+    # ======================================================================
+    #  SELLER FLOW
+    # ======================================================================
     if lead.lead_type == "SELLER":
 
         if state.current_step == "SELL_Q1":
             lead.data["property_type"] = normalize_answer("Property Type", txt)
             lead.save()
-            send_whatsapp_message(phone, "Nice! 📐 What is the area in sq.ft?")
+            send_whatsapp_message(phone, "📐 Enter the area in sq.ft:")
             state.current_step = "SELL_Q2"
             state.save()
             return
@@ -108,23 +154,23 @@ def handle_message(phone, text):
         if state.current_step == "SELL_Q2":
             lead.data["area_sqft"] = normalize_answer("Area", txt)
             lead.save()
-            send_whatsapp_message(phone, "How many bedrooms? (1BHK/2BHK/etc)")
+            send_whatsapp_buttons(phone, "🛏 Bedrooms?", ["1BHK", "2BHK", "3BHK"])
             state.current_step = "SELL_Q3"
             state.save()
             return
 
         if state.current_step == "SELL_Q3":
-            lead.data["bhk"] = normalize_answer("Bedroom Count", txt)
+            lead.data["bhk"] = normalize_answer("Bedrooms", txt)
             lead.save()
-            send_whatsapp_message(phone, "May I have your name?")
+            send_whatsapp_message(phone, "🧾 May I have your name?")
             state.current_step = "SELL_Q4"
             state.save()
             return
 
         if state.current_step == "SELL_Q4":
-            lead.data["name"] = txt
+            lead.data["name"] = text.strip()
             lead.save()
-            send_whatsapp_message(phone, "📍 Where is your property located?")
+            send_whatsapp_message(phone, "📍 Property location?")
             state.current_step = "SELL_Q5"
             state.save()
             return
@@ -132,25 +178,31 @@ def handle_message(phone, text):
         if state.current_step == "SELL_Q5":
             lead.data["location"] = normalize_answer("Location", txt)
             lead.save()
-            send_whatsapp_message(phone, "💰 What's your expected price range?")
+            send_whatsapp_message(phone, "💰 Expected price range?")
             state.current_step = "SELL_Q6"
             state.save()
             return
 
         if state.current_step == "SELL_Q6":
-            lead.data["price_range"] = normalize_answer("Price Range", txt)
+            lead.data["price_range"] = normalize_answer("Price", txt)
             lead.save()
-            send_whatsapp_message(phone, "🏷️ Any amenities? (Pool, Gym, Security etc.)")
+            send_whatsapp_buttons(phone, "🏷 Amenities?", ["Pool", "Gym", "Other"])
             state.current_step = "SELL_Q7"
             state.save()
             return
 
         if state.current_step == "SELL_Q7":
+            if txt == "other":
+                send_whatsapp_message(phone, "Type amenities (e.g., Power Backup, Garden, Lift):")
+                state.current_step = "SELL_Q7_OTHER"
+                state.save()
+                return
+
             lead.data["amenities"] = normalize_answer("Amenities", txt)
             lead.status = "NEW"
             lead.save()
 
-            # Save to Property Table
+            # Save Property
             Property.objects.create(
                 SELLER=lead,
                 property_type=lead.data.get("property_type"),
@@ -161,76 +213,79 @@ def handle_message(phone, text):
                 amenities=lead.data.get("amenities"),
             )
 
-            # ===== SCORING =====
+            # Score Lead
             score, segment, reason = ai_score_lead(lead)
             lead.score = score
             lead.segment = segment
-            lead.rejection_reason = "" if segment != "NONE" else reason
+            lead.rejection_reason = reason if segment == "NONE" else ""
             lead.status = "QUALIFIED" if segment in ["HOT", "WARM"] else "UNQUALIFIED"
             lead.save()
 
-            # ===== SHEETS SYNC =====
+            # Save to Sheets
             add_lead_to_sheet(lead)
 
-            # ===== GOOGLE DRIVE FOLDER =====
+            # Create Google Drive Upload Link
             folder_name = f"{lead.data.get('name', 'Seller')} - {lead.phone}"
             drive_link = create_drive_folder(folder_name)
 
             if drive_link:
                 lead.data["drive_link"] = drive_link
                 lead.save()
-                send_whatsapp_message(
-                    phone,
-                    f"📁 Please upload property images/videos here:\n{drive_link}"
-                )
-            else:
-                send_whatsapp_message(phone, "⚠️ Upload link couldn't be generated. Our team will help manually.")
+                send_whatsapp_message(phone, f"📁 Upload property media here:\n{drive_link}")
 
-            send_whatsapp_message(phone, f"🎉 Property saved! (Lead segment: {segment}). Our team will contact you soon.")
+            send_whatsapp_message(phone, f"🎉 Property saved! Lead segment: *{segment}*.")
             state.current_step = "COMPLETED"
             state.save()
             return
 
-    # ================= BUY FLOW =================
+        if state.current_step == "SELL_Q7_OTHER":
+            lead.data["amenities"] = normalize_answer("Amenities", txt)
+            state.current_step = "SELL_Q7"
+            state.save()
+            return handle_message(phone, txt)
+
+
+    # ======================================================================
+    #  BUYER FLOW
+    # ======================================================================
     if lead.lead_type == "BUYER":
-        from .utils import send_whatsapp_message
 
         if state.current_step == "BUY_Q1":
             lead.data["property_type_preference"] = normalize_answer("Property Type", txt)
             lead.save()
-            send_whatsapp_message(phone, "📏 What area size do you prefer? (Example: 1000–1500 sq.ft)")
+            send_whatsapp_message(phone, "📏 Preferred area? (e.g., 1000–1500 sq.ft)")
             state.current_step = "BUY_Q2"
             state.save()
             return
 
         if state.current_step == "BUY_Q2":
-            lead.data["area_preference"] = normalize_answer("Area Preference", txt)
+            lead.data["area_preference"] = normalize_answer("Area", txt)
             lead.save()
-            send_whatsapp_message(phone, "🛏️ How many bedrooms do you need? (1BHK/2BHK/etc)")
+            send_whatsapp_buttons(phone, "🛏 Bedrooms needed?", ["1BHK", "2BHK", "3BHK"])
             state.current_step = "BUY_Q3"
             state.save()
             return
 
         if state.current_step == "BUY_Q3":
-            lead.data["bhk"] = normalize_answer("Bedroom Count", txt)
+            lead.data["bhk"] = normalize_answer("Bedrooms", txt)
             lead.save()
-            send_whatsapp_message(phone, "🧾 May I have your name?")
+            send_whatsapp_message(phone, "🧾 Your name?")
             state.current_step = "BUY_Q4"
             state.save()
             return
 
         if state.current_step == "BUY_Q4":
-            lead.data["name"] = txt
+            lead.data["name"] = text.strip()
             lead.save()
-            send_whatsapp_message(phone, "📍 Which location are you interested in?")
+            send_whatsapp_message(phone, "📍 Preferred location?")
             state.current_step = "BUY_Q5"
             state.save()
             return
 
         if state.current_step == "BUY_Q5":
-            lead.data["location_preference"] = normalize_answer("Location Preference", txt)
+            lead.data["location_preference"] = normalize_answer("Location", txt)
             lead.save()
-            send_whatsapp_message(phone, "💰 What's your budget?")
+            send_whatsapp_message(phone, "💰 Budget?")
             state.current_step = "BUY_Q6"
             state.save()
             return
@@ -238,37 +293,51 @@ def handle_message(phone, text):
         if state.current_step == "BUY_Q6":
             lead.data["budget"] = normalize_answer("Budget", txt)
             lead.save()
-            send_whatsapp_message(phone, "🏷️ Any amenities you prefer? (Pool, Gym etc.)")
+            send_whatsapp_buttons(phone, "🏷 Amenities needed?", ["Pool", "Gym", "Other"])
             state.current_step = "BUY_Q7"
             state.save()
             return
 
         if state.current_step == "BUY_Q7":
+            if txt == "other":
+                send_whatsapp_message(phone, "Type preferred amenities (e.g., Lift, Garden, Backup):")
+                state.current_step = "BUY_Q7_OTHER"
+                state.save()
+                return
+
             lead.data["amenities"] = normalize_answer("Amenities", txt)
             lead.status = "NEW"
             lead.save()
 
-            # ===== SCORING =====
+            # Score Lead
             score, segment, reason = ai_score_lead(lead)
             lead.score = score
             lead.segment = segment
-            lead.rejection_reason = "" if segment != "NONE" else reason
+            lead.rejection_reason = reason if segment == "NONE" else ""
             lead.status = "QUALIFIED" if segment in ["HOT", "WARM"] else "UNQUALIFIED"
             lead.save()
 
-            # ===== SHEETS SYNC =====
+            # Save To Sheets
             add_lead_to_sheet(lead)
 
-            # Match SELLER properties
+            # Show matching properties
             send_matching_properties_to_buyer(lead, phone)
-
-            send_whatsapp_message(phone, f"✅ Your requirements are saved. (Lead segment: {segment}). Our team will follow up.")
+            send_whatsapp_message(phone, f"🎉 Saved! Lead segment: *{segment}*.")
             state.current_step = "COMPLETED"
             state.save()
             return
 
-    # ================= DEFAULT =================
-    send_whatsapp_message(phone, "🙏 Thank you! Our team will get back to you soon.")
+        if state.current_step == "BUY_Q7_OTHER":
+            lead.data["amenities"] = normalize_answer("Amenities", txt)
+            state.current_step = "BUY_Q7"
+            state.save()
+            return handle_message(phone, txt)
+
+    # ======================================================================
+    #  FALLBACK
+    # ======================================================================
+    send_whatsapp_message(phone, "❓ I didn't understand that. Type *Hi* to start over.")
+
 
 
 # ==================== WEBHOOK ENDPOINT ====================
@@ -291,10 +360,29 @@ def whatsapp_webhook(request):
         try:
             message = data["entry"][0]["changes"][0]["value"]["messages"][0]
             from_phone = message["from"]
-            text = message.get("text", {}).get("body", "")
-            handle_message(from_phone, text)
+            
+            # Handle button responses (interactive messages)
+            if message.get("type") == "interactive" and message.get("interactive", {}).get("type") == "button_reply":
+                button_reply = message["interactive"]["button_reply"]
+                # Use button ID (more reliable) or fallback to title
+                text = button_reply.get("id") or button_reply.get("title", "")
+                print(f"🔘 Button clicked: ID='{button_reply.get('id')}', Title='{button_reply.get('title')}' -> Using: '{text}'")
+            # Handle regular text messages
+            elif message.get("type") == "text":
+                text = message.get("text", {}).get("body", "")
+                print(f"💬 Text message: '{text}'")
+            else:
+                text = ""
+                print(f"⚠️ Unknown message type: {message.get('type')}")
+            
+            if text:
+                handle_message(from_phone, text)
+            else:
+                print("⚠️ No text extracted from message")
         except Exception as e:
-            print("❌ Error:", e)
+            print(f"❌ Webhook Error: {e}")
+            import traceback
+            traceback.print_exc()
 
         return JsonResponse({"status": "received"}, status=200)
 

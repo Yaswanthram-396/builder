@@ -14,6 +14,11 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 def create_drive_folder(folder_name):
     try:
+        # Check if credentials file exists
+        if not os.path.exists(GOOGLE_AUTH_FILE):
+            print(f"❌ Drive Error: Credentials file not found at {GOOGLE_AUTH_FILE}")
+            return None
+
         creds = service_account.Credentials.from_service_account_file(GOOGLE_AUTH_FILE, scopes=SCOPES)
         service = build("drive", "v3", credentials=creds)
 
@@ -39,5 +44,11 @@ def create_drive_folder(folder_name):
         return upload_link
 
     except Exception as e:
-        print("❌ Drive Error:", e)
+        error_msg = str(e)
+        if "accessNotConfigured" in error_msg or "403" in error_msg:
+            print("❌ Drive Error: Google Drive API is not enabled in your Google Cloud project.")
+            print("   Please enable it at: https://console.cloud.google.com/apis/library/drive.googleapis.com")
+            print("   Or visit the link provided in the error message above.")
+        else:
+            print(f"❌ Drive Error: {e}")
         return None

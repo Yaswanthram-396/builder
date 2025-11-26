@@ -31,5 +31,6 @@ def normalize_answer(question, answer):
     )
 
     crew = Crew(agents=[normalize_agent], tasks=[task])
-    result = crew.run()
-    return result.strip()
+    result = crew.kickoff()
+
+    return str(result).strip()  

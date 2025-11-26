@@ -31,5 +31,5 @@ def classify_intent(text):
     )
 
     crew = Crew(agents=[intent_agent], tasks=[task])
-    result = crew.run()
+    result = crew.kickoff()
     return result.strip().upper()

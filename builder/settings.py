@@ -30,7 +30,21 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-l5(0-b8=pqo#f*$vm6e4jo4_ll
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
+# ALLOWED_HOSTS - Allow ngrok domains for development
+# Set specific domains in .env (comma-separated), e.g., "localhost,127.0.0.1,your-ngrok-domain.ngrok-free.dev"
+ALLOWED_HOSTS_ENV = os.getenv('ALLOWED_HOSTS', '')
+if ALLOWED_HOSTS_ENV:
+    ALLOWED_HOSTS = [host.strip() for host in ALLOWED_HOSTS_ENV.split(',')]
+elif DEBUG:
+    # In development mode, allow localhost and common patterns
+    # For ngrok, add your specific domain to ALLOWED_HOSTS in .env
+    # Example: ALLOWED_HOSTS=nobuko-subpetrosal-caden.ngrok-free.dev,localhost,127.0.0.1
+    ALLOWED_HOSTS = [
+        'localhost',
+        '127.0.0.1',
+    ]
+else:
+    ALLOWED_HOSTS = []
 
 
 # Application definition
