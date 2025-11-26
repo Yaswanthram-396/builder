@@ -3,13 +3,14 @@ from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 import json
 import os
+from datetime import datetime
 
 from .utils import send_whatsapp_message
 from .utils import send_whatsapp_buttons
 from .models import Lead, ConversationState, Property
 
 # Sheets Sync   
-from whatsapp.sheets import add_lead_to_sheet
+from whatsapp.sheets import add_lead_to_sheet, update_buyer_property_selection
 
 # Drive Upload Link
 from whatsapp.drive import create_drive_folder
@@ -20,9 +21,7 @@ VERIFY_TOKEN = os.getenv('WHATSAPP_VERIFY_TOKEN', 'dheeraj-secret-token')
 # ==================== PROPERTY MATCHING ====================
 
 def send_matching_properties_to_buyer(buyer_lead, phone):
-    from .models import Property
-
-    buyer_data = buyer_lead.data
+    buyer_data = buyer_lead.data or {}
     b_type = (buyer_data.get("property_type_preference") or "").lower()
     b_loc = (buyer_data.get("location_preference") or "").lower()
 
@@ -39,6 +38,25 @@ def send_matching_properties_to_buyer(buyer_lead, phone):
     if not props:
         send_whatsapp_message(phone, "🔍 No exact matches found! Our team will assist you shortly.")
         return
+
+    # Store property IDs and details in buyer's data for later reference
+    property_ids = [p.id for p in props]
+    property_details = {}
+    for p in props:
+        property_details[str(p.id)] = {
+            "property_id": p.id,
+            "seller_id": p.SELLER.id,
+            "property_type": p.property_type,
+            "area_sqft": p.area_sqft,
+            "bhk": p.bhk,
+            "location": p.location,
+            "price_range": p.price_range,
+            "amenities": p.amenities
+        }
+    
+    buyer_lead.data["matching_property_ids"] = property_ids
+    buyer_lead.data["matching_properties"] = property_details
+    buyer_lead.save()
 
     lines = ["🎉 I found these matching properties:\n"]
     for idx, p in enumerate(props, start=1):
@@ -221,16 +239,19 @@ def handle_message(phone, text):
             lead.status = "QUALIFIED" if segment in ["HOT", "WARM"] else "UNQUALIFIED"
             lead.save()
 
-            # Save to Sheets
-            add_lead_to_sheet(lead)
-
-            # Create Google Drive Upload Link
+            # Create Google Drive Upload Link FIRST (before saving to sheets)
             folder_name = f"{lead.data.get('name', 'Seller')} - {lead.phone}"
             drive_link = create_drive_folder(folder_name)
 
             if drive_link:
                 lead.data["drive_link"] = drive_link
                 lead.save()
+                print(f"✅ Drive link stored for seller {lead.phone}: {drive_link}")
+
+            # Save to Sheets (now includes drive_link) - update existing row if it exists
+            add_lead_to_sheet(lead, update_existing=True)
+
+            if drive_link:
                 send_whatsapp_message(phone, f"📁 Upload property media here:\n{drive_link}")
 
             send_whatsapp_message(phone, f"🎉 Property saved! Lead segment: *{segment}*.")
@@ -323,7 +344,7 @@ def handle_message(phone, text):
             # Show matching properties
             send_matching_properties_to_buyer(lead, phone)
             send_whatsapp_message(phone, f"🎉 Saved! Lead segment: *{segment}*.")
-            state.current_step = "COMPLETED"
+            state.current_step = "BUY_PROPERTY_SELECTION"
             state.save()
             return
 
@@ -332,6 +353,81 @@ def handle_message(phone, text):
             state.current_step = "BUY_Q7"
             state.save()
             return handle_message(phone, txt)
+
+        # Handle property selection
+        if state.current_step == "BUY_PROPERTY_SELECTION":
+            # Parse user input to get property number
+            try:
+                property_number = int(txt)
+            except ValueError:
+                send_whatsapp_message(phone, "❓ Please reply with a number (1, 2, 3...) to select a property.")
+                return
+            
+            # Get stored matching properties
+            matching_ids = lead.data.get("matching_property_ids", [])
+            matching_props = lead.data.get("matching_properties", {})
+            
+            if not matching_ids or property_number < 1 or property_number > len(matching_ids):
+                send_whatsapp_message(phone, f"❓ Invalid selection. Please choose a number between 1 and {len(matching_ids)}.")
+                return
+            
+            # Get the selected property ID (convert to 0-indexed)
+            selected_property_id = matching_ids[property_number - 1]
+            
+            try:
+                # Get the Property object
+                selected_property = Property.objects.get(id=selected_property_id)
+                
+                # Get the seller's lead to access drive_link
+                seller_lead = selected_property.SELLER
+                seller_data = seller_lead.data or {}
+                drive_link = seller_data.get("drive_link", "")
+                
+                # Store selection details in buyer's data
+                lead.data["selected_property_type"] = selected_property.property_type or ""
+                lead.data["selected_property_location"] = selected_property.location or ""
+                lead.data["selected_property_price"] = selected_property.price_range or ""
+                lead.data["selected_property_drive_link"] = drive_link
+                lead.data["selection_timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                lead.save()
+                
+                # Update buyer's row in sheets with selected property details
+                update_buyer_property_selection(lead, selected_property, seller_lead)
+                
+                # Send drive link to buyer
+                if drive_link:
+                    send_whatsapp_message(
+                        phone,
+                        f"✅ Great choice! Here's the property details:\n\n"
+                        f"📐 Area: {selected_property.area_sqft or 'N/A'} sq.ft\n"
+                        f"📍 Location: {selected_property.location or 'N/A'}\n"
+                        f"💰 Price: {selected_property.price_range or 'N/A'}\n"
+                        f"🛠 Amenities: {selected_property.amenities or 'N/A'}\n\n"
+                        f"📁 View property images/videos here:\n{drive_link}"
+                    )
+                else:
+                    send_whatsapp_message(
+                        phone,
+                        f"✅ Great choice! Here's the property details:\n\n"
+                        f"📐 Area: {selected_property.area_sqft or 'N/A'} sq.ft\n"
+                        f"📍 Location: {selected_property.location or 'N/A'}\n"
+                        f"💰 Price: {selected_property.price_range or 'N/A'}\n"
+                        f"🛠 Amenities: {selected_property.amenities or 'N/A'}\n\n"
+                        f"⚠️ Property images link not available yet. Our team will share it shortly."
+                    )
+                
+                send_whatsapp_message(phone, "🎉 Our team will contact you soon to proceed!")
+                state.current_step = "COMPLETED"
+                state.save()
+                return
+                
+            except Property.DoesNotExist:
+                send_whatsapp_message(phone, "❌ Selected property no longer exists. Please type 'Hi' to start over.")
+                return
+            except Exception as e:
+                print(f"❌ Error handling property selection: {e}")
+                send_whatsapp_message(phone, "❌ An error occurred. Please try again or type 'Hi' to start over.")
+                return
 
     # ======================================================================
     #  FALLBACK
@@ -358,27 +454,39 @@ def whatsapp_webhook(request):
         print("📩 Incoming:", json.dumps(data, indent=2))
 
         try:
-            message = data["entry"][0]["changes"][0]["value"]["messages"][0]
-            from_phone = message["from"]
+            value = data["entry"][0]["changes"][0]["value"]
             
-            # Handle button responses (interactive messages)
-            if message.get("type") == "interactive" and message.get("interactive", {}).get("type") == "button_reply":
-                button_reply = message["interactive"]["button_reply"]
-                # Use button ID (more reliable) or fallback to title
-                text = button_reply.get("id") or button_reply.get("title", "")
-                print(f"🔘 Button clicked: ID='{button_reply.get('id')}', Title='{button_reply.get('title')}' -> Using: '{text}'")
-            # Handle regular text messages
-            elif message.get("type") == "text":
-                text = message.get("text", {}).get("body", "")
-                print(f"💬 Text message: '{text}'")
-            else:
-                text = ""
-                print(f"⚠️ Unknown message type: {message.get('type')}")
+            # Handle status updates (sent, delivered, read) - these don't have messages
+            if "statuses" in value:
+                # This is a status update, not a message - ignore it
+                print(f"📊 Status update received: {value['statuses'][0].get('status', 'unknown')}")
+                return JsonResponse({"status": "received"}, status=200)
             
-            if text:
-                handle_message(from_phone, text)
+            # Handle incoming messages
+            if "messages" in value:
+                message = value["messages"][0]
+                from_phone = message["from"]
+                
+                # Handle button responses (interactive messages)
+                if message.get("type") == "interactive" and message.get("interactive", {}).get("type") == "button_reply":
+                    button_reply = message["interactive"]["button_reply"]
+                    # Use button ID (more reliable) or fallback to title
+                    text = button_reply.get("id") or button_reply.get("title", "")
+                    print(f"🔘 Button clicked: ID='{button_reply.get('id')}', Title='{button_reply.get('title')}' -> Using: '{text}'")
+                # Handle regular text messages
+                elif message.get("type") == "text":
+                    text = message.get("text", {}).get("body", "")
+                    print(f"💬 Text message: '{text}'")
+                else:
+                    text = ""
+                    print(f"⚠️ Unknown message type: {message.get('type')}")
+                
+                if text:
+                    handle_message(from_phone, text)
+                else:
+                    print("⚠️ No text extracted from message")
             else:
-                print("⚠️ No text extracted from message")
+                print("⚠️ No messages or statuses in webhook payload")
         except Exception as e:
             print(f"❌ Webhook Error: {e}")
             import traceback

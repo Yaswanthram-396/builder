@@ -40,13 +40,19 @@ def setup_headers(sheet):
                 "Area (sq.ft)",
                 "BHK",
                 "Status",
-                "Timestamp"
+                "Drive Link",
+                "Timestamp",
+                "Selected Property Type",
+                "Selected Property Location",
+                "Selected Property Price",
+                "Selected Property Drive Link",
+                "Selection Timestamp"
             ]
             # Insert headers at the top (this will shift existing rows down)
             sheet.insert_row(headers, 1)
             # Format header row (make it bold)
             try:
-                sheet.format("A1:L1", {"textFormat": {"bold": True}})
+                sheet.format("A1:R1", {"textFormat": {"bold": True}})
             except:
                 pass  # Formatting is optional, continue if it fails
     except Exception as e:
@@ -54,7 +60,12 @@ def setup_headers(sheet):
 
 
 # ======== PUSH DATA ========
-def add_lead_to_sheet(lead):
+def add_lead_to_sheet(lead, update_existing=False):
+    """
+    Add or update lead in sheet.
+    If update_existing=True, will try to find and update existing row by phone number.
+    Otherwise, appends a new row.
+    """
     try:
         sheet = connect_sheet().sheet1  # first tab
 
@@ -74,10 +85,33 @@ def add_lead_to_sheet(lead):
             data.get("area_sqft") or data.get("area_preference") or "",  # Area field - FIXED
             data.get("bhk") or "",
             lead.status,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            data.get("drive_link", ""),  # Drive Link column
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            data.get("selected_property_type", ""),  # Selected Property Type
+            data.get("selected_property_location", ""),  # Selected Property Location
+            data.get("selected_property_price", ""),  # Selected Property Price
+            data.get("selected_property_drive_link", ""),  # Selected Property Drive Link
+            data.get("selection_timestamp", "")  # Selection Timestamp
         ]
 
+        # Try to update existing row if requested
+        if update_existing:
+            all_values = sheet.get_all_values()
+            for idx, existing_row in enumerate(all_values, start=1):
+                # Skip header row
+                if idx == 1:
+                    continue
+                # Check if phone matches (column C, index 2)
+                if len(existing_row) > 2 and existing_row[2] == lead.phone:
+                    # Update the existing row
+                    sheet.delete_rows(idx)
+                    sheet.insert_row(row, idx)
+                    print(f"✅ Updated existing row {idx} for phone {lead.phone}")
+                    return True
+
+        # Append new row if not updating or row not found
         sheet.append_row(row)
+        print(f"✅ Added new row for phone {lead.phone}")
         return True
 
     except Exception as e:
@@ -88,4 +122,53 @@ def add_lead_to_sheet(lead):
             print("   Note: Google Sheets requires Drive API to be enabled for file access.")
         else:
             print(f"❌ Google Sheets Error: {e}")
+        return False
+
+
+# ======== UPDATE BUYER PROPERTY SELECTION ========
+def update_buyer_property_selection(lead, selected_property, seller_lead):
+    """Update buyer's row in sheets with selected property details"""
+    try:
+        sheet = connect_sheet().sheet1
+        
+        # Find the buyer's row by phone number
+        all_values = sheet.get_all_values()
+        row_index = None
+        
+        for idx, row in enumerate(all_values, start=1):
+            # Skip header row
+            if idx == 1:
+                continue
+            # Check if phone matches (column C, index 2)
+            if len(row) > 2 and row[2] == lead.phone:
+                row_index = idx
+                break
+        
+        if not row_index:
+            print(f"⚠️ Buyer row not found for phone {lead.phone}")
+            return False
+        
+        # Get seller's drive link
+        seller_data = seller_lead.data or {}
+        drive_link = seller_data.get("drive_link", "")
+        
+        # Update the row with selected property details
+        # Column indices: N=13, O=14, P=15, Q=16, R=17 (0-indexed: 13, 14, 15, 16, 17)
+        updates = {
+            13: selected_property.property_type or "",  # Selected Property Type
+            14: selected_property.location or "",  # Selected Property Location
+            15: selected_property.price_range or "",  # Selected Property Price
+            16: drive_link,  # Selected Property Drive Link
+            17: datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Selection Timestamp
+        }
+        
+        # Update each cell
+        for col_idx, value in updates.items():
+            sheet.update_cell(row_index, col_idx + 1, value)  # +1 because gspread is 1-indexed
+        
+        print(f"✅ Updated buyer property selection in sheets (row {row_index})")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error updating buyer property selection: {e}")
         return False
