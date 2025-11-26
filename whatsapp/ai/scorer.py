@@ -34,10 +34,10 @@ def ai_score_lead(lead):
     - Good engagement or clarity = bonus points.
 
     Then classify:
-    - 80–100  = HOT (contact ASAP)
-    - 50–79   = WARM (good lead)
-    - 20–49   = COLD (not ready)
-    - Below 20 = NONE (reject)
+    - 80–100  = PREMIUM (high priority, ready to proceed)
+    - 50–79   = ACTIVE (engaged lead, needs follow-up)
+    - 20–49   = PROSPECT (early stage, needs nurturing)
+    - Below 20 = INACTIVE (not qualified or rejected)
 
     Return strictly in JSON with keys: score, segment, reason.
     """)
@@ -73,7 +73,7 @@ def ai_score_lead(lead):
 
         return (
             int(result.get("score", 0)),
-            result.get("segment", "NONE"),
+            result.get("segment", "INACTIVE"),
             result.get("reason", "No reason provided.")
         )
 
@@ -81,8 +81,8 @@ def ai_score_lead(lead):
         print(f"❌ GPT Scoring JSON Error: {e}")
         print(f"   Response was: {text[:200] if 'text' in locals() else 'No response'}")
         # fallback if JSON parsing fails
-        return (0, "NONE", "AI scoring failed - invalid JSON response.")
+        return (0, "INACTIVE", "AI scoring failed - invalid JSON response.")
     except Exception as e:
         print(f"❌ GPT Scoring Error: {e}")
         # fallback if something fails
-        return (0, "NONE", "AI scoring failed.")
+        return (0, "INACTIVE", "AI scoring failed.")

@@ -14,10 +14,10 @@ class Lead(models.Model):
     )
 
     SEGMENT_CHOICES = (
-        ("HOT", "Hot"),
-        ("WARM", "Warm"),
-        ("COLD", "Cold"),
-        ("NONE", "None"),
+        ("PREMIUM", "Premium"),
+        ("ACTIVE", "Active"),
+        ("PROSPECT", "Prospect"),
+        ("INACTIVE", "Inactive"),
     )
 
     phone = models.CharField(max_length=20, unique=True)
@@ -28,7 +28,7 @@ class Lead(models.Model):
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="NEW")
     score = models.IntegerField(null=True, blank=True)
-    segment = models.CharField(max_length=10, choices=SEGMENT_CHOICES, default="NONE")
+    segment = models.CharField(max_length=10, choices=SEGMENT_CHOICES, default="INACTIVE")
     rejection_reason = models.TextField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

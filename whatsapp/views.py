@@ -235,8 +235,8 @@ def handle_message(phone, text):
             score, segment, reason = ai_score_lead(lead)
             lead.score = score
             lead.segment = segment
-            lead.rejection_reason = reason if segment == "NONE" else ""
-            lead.status = "QUALIFIED" if segment in ["HOT", "WARM"] else "UNQUALIFIED"
+            lead.rejection_reason = reason if segment == "INACTIVE" else ""
+            lead.status = "QUALIFIED" if segment in ["PREMIUM", "ACTIVE"] else "UNQUALIFIED"
             lead.save()
 
             # Create Google Drive Upload Link FIRST (before saving to sheets)
@@ -334,8 +334,8 @@ def handle_message(phone, text):
             score, segment, reason = ai_score_lead(lead)
             lead.score = score
             lead.segment = segment
-            lead.rejection_reason = reason if segment == "NONE" else ""
-            lead.status = "QUALIFIED" if segment in ["HOT", "WARM"] else "UNQUALIFIED"
+            lead.rejection_reason = reason if segment == "INACTIVE" else ""
+            lead.status = "QUALIFIED" if segment in ["PREMIUM", "ACTIVE"] else "UNQUALIFIED"
             lead.save()
 
             # Save To Sheets
